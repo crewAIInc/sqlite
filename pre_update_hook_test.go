@@ -179,3 +179,95 @@ func TestPreUpdateHookLargeRowID(t *testing.T) {
 		t.Errorf("NewRowID after UPDATE: got %d, want %d", gotNewRowID, newLargeRowID)
 	}
 }
+
+func TestPreUpdateHookTextWithNUL(t *testing.T) {
+	// SQLite permits NUL bytes inside a TEXT value. The hook has to report such
+	// a value whole, on the old value as well as the new one.
+	const inserted = "a\x00b\x00c"
+	const updated = inserted + "d"
+
+	driverName := "sqlite_pre_update_hook_nul_test"
+
+	var insertNew, updateOld, updateNew, deleteOld []any
+
+	var testDriver sqlite.Driver
+	testDriver.RegisterConnectionHook(func(conn sqlite.ExecQuerierContext, dsn string) error {
+		hooker, ok := conn.(sqlite.HookRegisterer)
+		if !ok {
+			return fmt.Errorf("conn %T does not implement HookRegisterer", conn)
+		}
+		hooker.RegisterPreUpdateHook(func(data sqlite.SQLitePreUpdateData) {
+			switch data.Op {
+			case sqlite3.SQLITE_INSERT:
+				insertNew = make([]any, data.Count())
+				if err := data.New(insertNew...); err != nil {
+					t.Error(err)
+				}
+			case sqlite3.SQLITE_UPDATE:
+				updateOld = make([]any, data.Count())
+				if err := data.Old(updateOld...); err != nil {
+					t.Error(err)
+				}
+				updateNew = make([]any, data.Count())
+				if err := data.New(updateNew...); err != nil {
+					t.Error(err)
+				}
+			case sqlite3.SQLITE_DELETE:
+				deleteOld = make([]any, data.Count())
+				if err := data.Old(deleteOld...); err != nil {
+					t.Error(err)
+				}
+			}
+		})
+		return nil
+	})
+
+	sql.Register(driverName, &testDriver)
+
+	db, err := sql.Open(driverName, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	// One connection, so every statement below passes the same hook.
+	db.SetMaxOpenConns(1)
+
+	for _, stmt := range []struct {
+		sql  string
+		args []any
+	}{
+		{"CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)", nil},
+		{"INSERT INTO t VALUES(1, ?)", []any{inserted}},
+		{"UPDATE t SET v = ? WHERE id = 1", []any{updated}},
+		{"DELETE FROM t", nil},
+	} {
+		if _, err := db.Exec(stmt.sql, stmt.args...); err != nil {
+			t.Fatalf("%s: %v", stmt.sql, err)
+		}
+	}
+
+	for _, c := range []struct {
+		name string
+		row  []any
+		want string
+	}{
+		{"insert new", insertNew, inserted},
+		{"update old", updateOld, inserted},
+		{"update new", updateNew, updated},
+		{"delete old", deleteOld, updated},
+	} {
+		if len(c.row) != 2 {
+			t.Errorf("%s: reported %d columns, expected 2", c.name, len(c.row))
+			continue
+		}
+		got, ok := c.row[1].(string)
+		if !ok {
+			t.Errorf("%s: reported %T, expected string", c.name, c.row[1])
+			continue
+		}
+		if got != c.want {
+			t.Errorf("%s: reported %q (%d bytes), expected %q (%d bytes)", c.name, got, len(got), c.want, len(c.want))
+		}
+	}
+}

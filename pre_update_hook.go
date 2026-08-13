@@ -175,7 +175,19 @@ func (d *SQLitePreUpdateData) value(ppValue uintptr, i int, new bool) (any, erro
 		}
 		src = v
 	case sqlite3.SQLITE_TEXT:
-		src = libc.GoString(sqlite3.Xsqlite3_value_text(d.tls, ptrValue))
+		// TEXT may contain NUL bytes, so the value is copied by length the way
+		// the BLOB case above is. A C-string conversion here reports such a
+		// value shorter than it is. sqlite3_value_text can convert the value in
+		// place, so the length is read after it, per the sqlite3_value_bytes
+		// documentation.
+		textPtr := sqlite3.Xsqlite3_value_text(d.tls, ptrValue)
+		size := sqlite3.Xsqlite3_value_bytes(d.tls, ptrValue)
+
+		var v string
+		if textPtr != 0 && size != 0 {
+			v = string((*libc.RawMem)(unsafe.Pointer(textPtr))[:size:size])
+		}
+		src = v
 	case sqlite3.SQLITE_NULL:
 		src = nil
 	}
