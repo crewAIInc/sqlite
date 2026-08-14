@@ -32969,6 +32969,7 @@ func _pagerWalFrames(tls *libc.TLS, pPager uintptr, _pList uintptr, nTruncate TP
 	if (*TPgHdr)(unsafe.Pointer(*(*uintptr)(unsafe.Pointer(bp)))).Fpgno == uint32(1) {
 		_pager_write_changecounter(tls, *(*uintptr)(unsafe.Pointer(bp)))
 	}
+	callDirtyPagesHook(tls, pPager, *(*uintptr)(unsafe.Pointer(bp)), nTruncate, isCommit)
 	rc = _sqlite3WalFrames(tls, (*TPager)(unsafe.Pointer(pPager)).FpWal, int32((*TPager)(unsafe.Pointer(pPager)).FpageSize), *(*uintptr)(unsafe.Pointer(bp)), nTruncate, isCommit, libc.Int32FromUint8((*TPager)(unsafe.Pointer(pPager)).FwalSyncFlags))
 	if rc == SQLITE_OK && (*TPager)(unsafe.Pointer(pPager)).FpBackup != 0 {
 		p = *(*uintptr)(unsafe.Pointer(bp))
